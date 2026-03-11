@@ -1,0 +1,23 @@
+# Logs e Pastas Temporárias
+downloads_temp/
+saida/
+logs/
+output/
+debug/
+tmp_download/
+
+# Ambientes Python
+.venv/
+env/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Build / Config do PyInstaller
+build/
+*.spec
+
+# IDEs
+.vscode/
+.idea/
