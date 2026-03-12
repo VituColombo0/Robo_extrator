@@ -395,41 +395,30 @@ def gerar_horarios_completos(base):
 
 def ajustar_radiacao(df):
     df["radiacao"] = pd.to_numeric(df["radiacao"], errors="coerce")
-    df.loc[df["radiacao"] > 998, "radiacao"] = np.nan
+    
+    # Ensure no negative values directly from raw data
+    df.loc[df["radiacao"] < 0, "radiacao"] = 0.0
+    
     df["hora"] = df["data_hora"].dt.hour + df["data_hora"].dt.minute / 60
-    mask_diurna = (df["hora"] >= 6) & (df["hora"] <= 18)
-    df.loc[~mask_diurna, "radiacao"] = 0.0
-    max_real = df.loc[mask_diurna, "radiacao"].max(skipna=True)
-    if pd.isna(max_real) or max_real <= 0:
-        max_real = 800
-    horas_dia = df.loc[mask_diurna, "hora"]
-    curva = np.sin(((horas_dia - 6) / 12) * np.pi) * max_real
-    df.loc[mask_diurna, "radiacao"] = curva.round(2)
+    
+    # Clamp nighttime radiation to exactly 0 to prevent issues like 100 radiation at 3 AM
+    mask_noturna = (df["hora"] < 6) | (df["hora"] > 18)
+    df.loc[mask_noturna, "radiacao"] = 0.0
+    
+    # Interpolate missing values slightly to avoid breaking the curve
+    df["radiacao"] = df["radiacao"].interpolate(limit_direction="both")
+    
     df["radiacao"] = df["radiacao"].clip(lower=0).round(2)
     df.drop(columns=["hora"], inplace=True)
     return df
 
 def evitar_temperaturas_repetidas(df):
     df["temperatura"] = pd.to_numeric(df["temperatura"], errors="coerce")
+    # Limita valores totalmente absurdos, mas confia no dado bruto real
     df.loc[(df["temperatura"] > 50) | (df["temperatura"] < -5), "temperatura"] = np.nan
 
-    def faixa_realista(hora):
-        if 0 <= hora < 6:
-            return 12, 18
-        elif 6 <= hora < 12:
-            return 16, 24
-        elif 12 <= hora < 15:
-            return 28, 31
-        elif 15 <= hora < 18:
-            return 24, 28
-        else:
-            return 12, 22
-
-    if len(df["temperatura"].dropna().unique()) < 5:
-        horarios = pd.to_datetime(df["data_hora"])
-        df["temperatura"] = pd.Series([np.random.uniform(*faixa_realista(h)) for h in horarios.dt.hour]).round(2)
-
-    df["temperatura"] = df["temperatura"].interpolate().rolling(window=3, min_periods=1).mean().round(2)
+    # Só interpola buracos reais, nao recria dados aleatórios destruindo os valores verdadeiros
+    df["temperatura"] = df["temperatura"].interpolate(limit_direction="both").round(2)
     return df
 
 def corrigir_csv(caminho_csv, pasta_corrigido, data_req_dia=None):
@@ -449,10 +438,7 @@ def corrigir_csv(caminho_csv, pasta_corrigido, data_req_dia=None):
 
     for col in COLUNAS_NUM:
         if col in df.columns:
-            df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
-                errors="coerce",
-            )
+            df[col] = _to_numeric_series(df[col])
 
     df = ajustar_radiacao(df)
     df = evitar_temperaturas_repetidas(df)
@@ -472,7 +458,15 @@ def corrigir_csv(caminho_csv, pasta_corrigido, data_req_dia=None):
 def _to_numeric_series(s):
     if pd.api.types.is_numeric_dtype(s):
         return pd.to_numeric(s, errors="coerce")
-    return pd.to_numeric(s.astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False), errors="coerce")
+    
+    def fix_val(val):
+        if pd.isna(val): return val
+        v = str(val).strip()
+        if ',' in v:
+            return v.replace('.', '').replace(',', '.')
+        return v
+        
+    return pd.to_numeric(s.apply(fix_val), errors="coerce")
 
 def tratar_akima_savgol(df, coluna, janela=21, poly=3):
     y = _to_numeric_series(df[coluna]).astype(float)
@@ -506,6 +500,10 @@ def tratar_akima_savgol(df, coluna, janela=21, poly=3):
     except Exception:
         y_f = y_interp
 
+    # Prevenir que o filtro crie anomalias negativas onde não devem existir
+    if coluna in ["radiacao", "vel_vento", "max_velocidade", "delta_pluv", "umidade"]:
+        y_f = np.clip(y_f, a_min=0.0, a_max=None)
+        
     return pd.Series(y_f).round(2)
 
 def gerar_excel_tratado(caminho_csv_corrigido, pasta_excel):
