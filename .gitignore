@@ -1,0 +1,20 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project specific
+saida/
+_internal/
+*.exe
+*.dll
+*.pyd
+.git/
+*.log
+*.png
+*.xlsx
+*.csv
